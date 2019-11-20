@@ -1,5 +1,5 @@
 function test_kron()
-  @testset "Kron" begin
+  @testset ExtendedTestSet "Kron" begin
     for A in Any[simple_matrix(Float64, 2, 3),
                  simple_sparse_matrix(Float64, 10, 10)]
       for B in Any[simple_matrix(Float64, 2, 3),
@@ -35,6 +35,15 @@ function test_kron()
         end
       end
     end
+  end
+
+  @testset ExtendedTestSet "issue110" begin
+    A = rand(2, 2)
+    op = LinearOperator(A)
+    K = kron(A, op)
+    x = rand(Complex{Float64}, 4)
+    y = K * x
+    @test eltype(y) == Complex{Float64}
   end
 end
 

@@ -9,6 +9,7 @@ export AbstractLinearOperator, LinearOperator,
        opInverse, opCholesky, opLDL, opHouseholder, opHermitian,
        check_ctranspose, check_hermitian, check_positive_definite,
        shape, hermitian, ishermitian, symmetric, issymmetric,
+       nprod, ntprod, nctprod,
        opRestriction, opExtension
 
 
@@ -31,12 +32,8 @@ import Base.hcat, Base.vcat, Base.hvcat
 abstract type AbstractLinearOperator{T} end
 OperatorOrMatrix = Union{AbstractLinearOperator, AbstractMatrix}
 
-include("adjtrans.jl")
-
 eltype(A :: AbstractLinearOperator{T}) where {T} = T
 isreal(A :: AbstractLinearOperator{T}) where {T} = T <: Real
-
-include("PreallocatedLinearOperators.jl")
 
 """
 Base type to represent a linear operator.
@@ -53,6 +50,32 @@ mutable struct LinearOperator{T} <: AbstractLinearOperator{T}
   prod    # apply the operator to a vector
   tprod   # apply the transpose operator to a vector
   ctprod  # apply the transpose conjugate operator to a vector
+  nprod :: Int
+  ntprod :: Int
+  nctprod :: Int
+end
+
+LinearOperator{T}(nrow::Int, ncol::Int, symmetric::Bool, hermitian::Bool, prod, tprod, ctprod) where T =
+  LinearOperator{T}(nrow, ncol, symmetric, hermitian, prod, tprod, ctprod, 0, 0, 0)
+
+nprod(op::AbstractLinearOperator) = op.nprod
+ntprod(op::AbstractLinearOperator) = op.ntprod
+nctprod(op::AbstractLinearOperator) = op.nctprod
+
+increase_nprod(op::AbstractLinearOperator) = (op.nprod += 1)
+increase_ntprod(op::AbstractLinearOperator) = (op.ntprod += 1)
+increase_nctprod(op::AbstractLinearOperator) = (op.nctprod += 1)
+
+"""
+  reset!(op)
+
+Reset the product counters of a linear operator.
+"""
+function reset!(op::AbstractLinearOperator)
+  op.nprod = 0
+  op.ntprod = 0
+  op.nctprod = 0
+  return op
 end
 
 """
@@ -68,11 +91,12 @@ size(op :: AbstractLinearOperator) = (op.nrow, op.ncol)
 Return the size of a linear operator along dimension `d`.
 """
 function size(op :: AbstractLinearOperator, d :: Int)
+  nrow, ncol = size(op)
   if d == 1
-    return op.nrow
+    return nrow
   end
   if d == 2
-    return op.ncol
+    return ncol
   end
   throw(LinearOperatorException("Linear operators only have 2 dimensions for now"))
 end
@@ -110,14 +134,15 @@ Display basic information about a linear operator.
 """
 function show(io :: IO, op :: AbstractLinearOperator)
   s  = "Linear operator\n"
-  s *= @sprintf("  nrow: %s\n", op.nrow)
-  s *= @sprintf("  ncol: %d\n", op.ncol)
+  nrow, ncol = size(op)
+  s *= @sprintf("  nrow: %s\n", nrow)
+  s *= @sprintf("  ncol: %d\n", ncol)
   s *= @sprintf("  eltype: %s\n", eltype(op))
-  s *= @sprintf("  symmetric: %s\n", op.symmetric)
-  s *= @sprintf("  hermitian: %s\n", op.hermitian)
-  #s *= @sprintf("  prod:   %s\n", string(op.prod))
-  #s *= @sprintf("  tprod:  %s\n", string(op.tprod))
-  #s *= @sprintf("  ctprod: %s", string(op.ctprod))
+  s *= @sprintf("  symmetric: %s\n", symmetric(op))
+  s *= @sprintf("  hermitian: %s\n", hermitian(op))
+  s *= @sprintf("  nprod:   %d\n", nprod(op))
+  s *= @sprintf("  ntprod:  %d\n", ntprod(op))
+  s *= @sprintf("  nctprod: %d\n", nctprod(op))
   s *= "\n"
   print(io, s)
 end
@@ -214,9 +239,10 @@ end
 
 
 # Apply an operator to a vector.
-function *(op :: AbstractLinearOperator, v :: AbstractVector)
+function *(op :: AbstractLinearOperator{T}, v :: AbstractVector{S}) where {T,S}
   size(v, 1) == size(op, 2) || throw(LinearOperatorException("shape mismatch"))
-  op.prod(v)
+  increase_nprod(op)
+  op.prod(v)::Vector{promote_type(T,S)}
 end
 
 
@@ -225,14 +251,14 @@ end
 
 Materialize an operator as a dense array using `op.ncol` products.
 """
-function Base.Matrix(op :: AbstractLinearOperator)
+function Base.Matrix(op :: AbstractLinearOperator{T}) where T
   (m, n) = size(op)
-  A = Array{eltype(op)}(undef, m, n)
-  ei = zeros(eltype(op), n)
+  A = Array{T}(undef, m, n)
+  ei = zeros(T, n)
   for i = 1 : n
-    ei[i] = 1
+    ei[i] = one(T)
     A[:, i] = op * ei
-    ei[i] = 0
+    ei[i] = zero(T)
   end
   return A
 end
@@ -322,6 +348,14 @@ end
 # Operator - scalar.
 -(op :: AbstractLinearOperator, x :: Number) = op + (-x)
 -(x :: Number, op :: AbstractLinearOperator) = x + (-op)
+
+
+include("adjtrans.jl")
+include("PreallocatedLinearOperators.jl")
+include("qn.jl")  # quasi-Newton operators
+include("kron.jl")
+include("TimedOperators.jl")
+include("BlockDiagonalOperator.jl")
 
 
 # Utility functions.
@@ -497,8 +531,8 @@ Zero operator of size `nrow`-by-`ncol` and of data type `T` (defaults to
 `Float64`).
 """
 function opZeros(T :: DataType, nrow :: Int, ncol :: Int)
-  prod = @closure v -> zeros(T, nrow)
-  tprod = @closure u -> zeros(T, ncol)
+  prod = @closure v -> zeros(promote_type(T,eltype(v)), nrow)
+  tprod = @closure u -> zeros(promote_type(T,eltype(u)), ncol)
   LinearOperator{T}(nrow, ncol, nrow == ncol, nrow == ncol, prod, tprod, tprod)
 end
 
@@ -701,9 +735,6 @@ function opHermitian(T :: AbstractMatrix)
   d = diag(T)
   opHermitian(d, T)
 end
-
-include("qn.jl")  # quasi-Newton operators
-include("kron.jl")
 
 """
     Z = opRestriction(I, ncol)

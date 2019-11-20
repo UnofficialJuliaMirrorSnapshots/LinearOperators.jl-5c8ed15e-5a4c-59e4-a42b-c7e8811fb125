@@ -4,9 +4,10 @@ function test_linop()
   rtol = sqrt(ϵ);
   A1 = simple_matrix(ComplexF64, nrow, ncol)
 
-  @testset "Basic operations" begin
+  @testset ExtendedTestSet "Basic operations" begin
     for op = (LinearOperator(A1), LinearOperator(A1')',
               transpose(LinearOperator(transpose(A1))),
+              conj(LinearOperator(conj(A1))),
               PreallocatedLinearOperator(A1))
       show(op);
 
@@ -100,6 +101,39 @@ function test_linop()
           @test norm(op' * v - A' * v) <= rtol * norm(A)
         end
       end
+
+      v = simple_vector(Float64, nrow)
+
+      A = simple_matrix(ComplexF64, nrow, nrow)
+      # Symmetric and Hermitian - actually a Real matrix, but with Complex type.
+      # This tests a specific condition located in PreallocatedLinearOperators.jl
+      # when eltype(A) is not Real but A is symmetric and hermitian.
+      A = A + A'; A = A + transpose(A)
+      op = PreallocatedLinearOperator(A, symmetric=true, hermitian=true)
+      @test norm(op * v - A * v) <= rtol * norm(A)
+      @test norm(transpose(op) * v - transpose(A) * v) <= rtol * norm(A)
+      @test norm(op' * v - A' * v) <= rtol * norm(A)
+
+      A = simple_matrix(ComplexF64, nrow, nrow)
+      A = A + A' # Hermitian
+      op = PreallocatedLinearOperator(A, symmetric=false, hermitian=true)
+      @test norm(op * v - A * v) <= rtol * norm(A)
+      @test norm(transpose(op) * v - transpose(A) * v) <= rtol * norm(A)
+      @test norm(op' * v - A' * v) <= rtol * norm(A)
+
+      A = simple_matrix(ComplexF64, nrow, nrow)
+      A = A + transpose(A) # Symmetric
+      op = PreallocatedLinearOperator(A, symmetric=true, hermitian=false)
+      @test norm(op * v - A * v) <= rtol * norm(A)
+      @test norm(transpose(op) * v - transpose(A) * v) <= rtol * norm(A)
+      @test norm(op' * v - A' * v) <= rtol * norm(A)
+
+      A = simple_matrix(ComplexF64, nrow, nrow)
+      A = Hermitian(A)
+      op = PreallocatedLinearOperator(A)
+      @test norm(op * v - A * v) <= rtol * norm(A)
+      @test norm(transpose(op) * v - transpose(A) * v) <= rtol * norm(A)
+      @test norm(op' * v - A' * v) <= rtol * norm(A)
     end
 
     @testset "Basic arithmetic operations" begin
@@ -175,7 +209,7 @@ function test_linop()
     end
   end
 
-  @testset "Basic operators" begin
+  @testset ExtendedTestSet "Basic operators" begin
     @testset "Identity" begin
       opI = opEye(nrow);
       v = simple_vector(ComplexF64, nrow)
@@ -371,7 +405,7 @@ function test_linop()
     end
   end
 
-  @testset "Linear system operators" begin
+  @testset ExtendedTestSet "Linear system operators" begin
     A = simple_matrix(ComplexF64, nrow, nrow)
     v = simple_vector(Float64, nrow)
 
@@ -417,7 +451,7 @@ function test_linop()
     end
   end
 
-  @testset "Inference" begin
+  @testset ExtendedTestSet "Inference" begin
     op = LinearOperator(5, 3, false, false,
                         p -> ones(5) + im * ones(5));
     @test eltype(op) == ComplexF64
@@ -437,9 +471,16 @@ function test_linop()
     A = simple_matrix(ComplexF64, 5, 5)
     @test_throws LinearOperatorException opCholesky(A, check=true)  # Not Hermitian / positive definite
     @test_throws LinearOperatorException opCholesky(-A'*A, check=true)  # Not positive definite
+
+    # Adjoint of a symmetric non-hermitian
+    A = simple_matrix(ComplexF64, 3, 3)
+    A = A + transpose(A)
+    op = LinearOperator(3, 3, true, false, v -> A * v)
+    v = rand(3)
+    @test op' * v ≈ A' * v
   end
 
-  @testset "Type specific operator" begin
+  @testset ExtendedTestSet "Type specific operator" begin
     prod = v -> [v[1] + v[2]; v[2]]
     ctprod = v -> [v[1]; v[1] + v[2]]
     op = LinearOperator(2, 2, false, false, prod, nothing, ctprod)
@@ -461,11 +502,11 @@ function test_linop()
     @test A == Matrix(opC)
     opF = LinearOperator(Float64, 2, 2, false, false, prod, tprod, ctprod) # The type is a lie
     @test eltype(opF) == Float64
-    @test_throws InexactError Matrix(opF)
+    @test_throws TypeError Matrix(opF)
   end
 
   # Issue #80
-  @testset "Test mul!" begin
+  @testset ExtendedTestSet "Test mul!" begin
     A = [1.0 1.0; 1.0 0.0]
     op = LinearOperator(A)
     y = zeros(2)
@@ -475,7 +516,7 @@ function test_linop()
   end
 
   # Issue #107
-  @testset "Unary and scalar operations on Adjoint and Transpose operators" begin
+  @testset ExtendedTestSet "Unary and scalar operations on Adjoint and Transpose operators" begin
     op = LinearOperator(rand(5, 3))
     for adjtrans in [adjoint, transpose]
       @test Matrix(adjtrans(-op)) == Matrix(-adjtrans(op))
@@ -484,7 +525,7 @@ function test_linop()
   end
 
   # Issue #109
-  @testset "Sum with Adjoint and Transpose" begin
+  @testset ExtendedTestSet "Sum with Adjoint and Transpose" begin
     A = rand(3,3) + im * rand(3,3)
     opA = LinearOperator(A)
     for adjtrans in [adjoint, transpose]
@@ -494,7 +535,7 @@ function test_linop()
   end
 
   # Issue #109
-  @testset "Cat with Adjoint and Transpose" begin
+  @testset ExtendedTestSet "Cat with Adjoint and Transpose" begin
     A = rand(3,3) + im * rand(3,3)
     opA = LinearOperator(A)
     for adjtrans in [adjoint, transpose]
@@ -509,6 +550,101 @@ function test_linop()
       @test Matrix([A; adjtrans(opA)]) == Matrix([A; adjtrans(A)])
       @test Matrix([adjtrans(opA)  opA; opA adjtrans(opA)]) == Matrix([adjtrans(A)  A; A adjtrans(A)])
     end
+  end
+
+  @testset ExtendedTestSet "Counters" begin
+    op = LinearOperator(rand(3,4) + im * rand(3,4))
+    @test nprod(op) == 0
+    @test ntprod(op) == 0
+    @test nctprod(op) == 0
+    nprods = 5
+    ntprods = 4
+    nctprods = 7
+    for _ = 1 : nprods
+      op * rand(4)
+    end
+    for _ = 1 : ntprods
+      transpose(op) * rand(3)
+    end
+    for _ = 1 : nctprods
+      op' * rand(3)
+    end
+    @test nprod(op) == nprods
+    @test ntprod(op) == ntprods
+    @test nctprod(op) == nctprods
+    for _ = 1 : nprods
+      conj(op) * rand(4)
+    end
+    @test nprod(op) == 2 * nprods
+
+    opᵀ = transpose(op)
+    @test nprod(opᵀ) == ntprod(op)
+    @test ntprod(opᵀ) == nprod(op)
+    @test nctprod(opᵀ) == nprod(op)
+
+    opᴴ = op'
+    @test nprod(opᴴ) == nctprod(op)
+    @test ntprod(opᴴ) == nprod(op)
+    @test nctprod(opᴴ) == nprod(op)
+
+    reset!(op)
+    @test nprod(op) == 0
+    @test ntprod(op) == 0
+    @test nctprod(op) == 0
+  end
+
+  @testset ExtendedTestSet "Timers" begin
+    op = LinearOperator(rand(3,4) + im * rand(3,4))
+    top = TimedLinearOperator(op)
+    nprods = 5
+    ntprods = 4
+    nctprods = 7
+    for _ = 1 : nprods
+      op * rand(4)
+    end
+    for _ = 1 : ntprods
+      transpose(op) * rand(3)
+    end
+    for _ = 1 : nctprods
+      op' * rand(3)
+    end
+    for fn ∈ (:size, :shape, :symmetric, :issymmetric, :hermitian, :ishermitian, :nprod, :ntprod, :nctprod)
+      @eval begin
+        @test $fn($top) == $fn($top.op)
+      end
+    end
+
+    reset!(op)
+    reset!(top)
+
+    top2 = TimedLinearOperator(op')  # the same as top'
+    nrow, ncol = size(op)
+    u = rand(nrow) + im * rand(nrow)
+    @test all(top' * u .== top2 * u)
+    v = rand(ncol) + im * rand(ncol)
+    @test all(top * v .== top2' * v)
+
+    top3 = TimedLinearOperator(transpose(op))  # the same as transpose(top)
+    nrow, ncol = size(op)
+    u = rand(nrow) + im * rand(nrow)
+    @test all(transpose(top) * u .== top3 * u)
+    v = rand(ncol) + im * rand(ncol)
+    @test all(top * v .== transpose(top3) * v)
+  end
+
+  @testset ExtendedTestSet "BlockDiagonal" begin
+    A = rand(3,4) + im * rand(3,4)
+    B = rand(3,3) + im * rand(3,3)
+    C = rand(4,2) + im * rand(4,2)
+    D = [A          zeros(3,3) zeros(3,2) ;
+         zeros(3,4) B          zeros(3,2) ;
+         zeros(4,4) zeros(4,3) C ]
+    M = BlockDiagonalOperator(LinearOperator.((A, B, C))...)
+    @test size(M, 1) == size(A, 1) + size(B, 1) + size(C, 1)
+    @test size(M, 2) == size(A, 2) + size(B, 2) + size(C, 2)
+    @test norm(Matrix(M) - D) ≤ sqrt(eps()) * norm(D)
+    @test norm(Matrix(transpose(M)) - transpose(D)) ≤ sqrt(eps()) * norm(D)
+    @test norm(Matrix(M') - D') ≤ sqrt(eps()) * norm(D)
   end
 end
 
